@@ -552,7 +552,7 @@ impl App {
                 dirty = false;
             }
 
-            if event::poll(tick_rate)? {
+            if event::poll(self.poll_wait(tick_rate))? {
                 match event::read()? {
                     // Only react to presses; on Windows every key also emits a
                     // release event, which would otherwise double every action.
@@ -565,6 +565,7 @@ impl App {
                         self.persist_preferences();
                         dirty = true;
                     }
+                    Event::Paste(text) => dirty |= self.handle_paste(&text),
                     Event::Mouse(mouse) => dirty |= self.handle_mouse(mouse),
                     // Resize re-runs layout against the new frame size, which
                     // is the next draw's job — but that draw has to happen.
@@ -756,6 +757,22 @@ impl App {
             .is_some_and(|slot| slot.panel.captures_input())
     }
 
+    /// How long the event loop may sleep before checking panels again.
+    ///
+    /// Dashboard data is content at the configured cadence. A focused panel
+    /// that has explicitly captured the keyboard may be interactive state with
+    /// asynchronous echo, so its own refresh request can shorten that wait.
+    /// Releasing input restores the ordinary budget immediately. The same
+    /// 16 ms floor as the configured rate prevents a panel from busy-looping.
+    fn poll_wait(&self, configured: Duration) -> Duration {
+        self.slots
+            .get(self.focus)
+            .filter(|slot| slot.panel.captures_input())
+            .map_or(configured, |slot| {
+                configured.min(slot.panel.refresh_interval().max(Duration::from_millis(16)))
+            })
+    }
+
     fn handle_key(&mut self, key: KeyEvent) {
         // Any key at all retires the startup hint. It has been read or it has
         // been ignored; either way it has had its turn.
@@ -767,9 +784,17 @@ impl App {
 
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
-        // Ctrl+C always quits, even mid-form, because a terminal user expects
-        // it to and there is no state we would lose: panels save as they go.
+        // Ctrl+C is still the unconditional way out, except that a panel with
+        // a real interrupt may consume one press after leaving the next one to
+        // fall through. That keeps the stronger, state-independent guarantee:
+        // Ctrl+C twice always quits.
         if ctrl && matches!(key.code, KeyCode::Char('c')) {
+            let interrupted = self.slots.get_mut(self.focus).is_some_and(|slot| {
+                slot.panel.handle_interrupt() == crate::panel::KeyOutcome::Consumed
+            });
+            if interrupted {
+                return;
+            }
             self.should_quit = true;
             return;
         }
@@ -850,6 +875,53 @@ impl App {
         }
 
         self.dispatch_key(key);
+    }
+
+    /// Route a terminal bracketed paste to the focused editor.
+    ///
+    /// A panel can consume the whole block so literal newlines and tabs remain
+    /// one operation. Existing single-line fields still receive the printable
+    /// key stream they did before bracketed paste was enabled; the fallback is
+    /// offered only to a panel already capturing input, so pasted global keys
+    /// can never quit or reconfigure the dashboard.
+    fn handle_paste(&mut self, text: &str) -> bool {
+        self.show_update_hint = false;
+        self.watch.mark_seen();
+
+        if self.show_help {
+            self.show_help = false;
+            return true;
+        }
+        if self.theme_picker.is_some() || self.picker.is_some() || self.arranging.is_some() {
+            return true;
+        }
+
+        let Some(slot) = self.slots.get_mut(self.focus) else {
+            return true;
+        };
+        if slot.panel.handle_paste(text) == crate::panel::KeyOutcome::Consumed {
+            return true;
+        }
+        if !slot.panel.captures_input() {
+            return true;
+        }
+
+        let text = text.replace("\r\n", "\n").replace('\r', "\n");
+        for character in text.chars() {
+            let code = match character {
+                '\n' => KeyCode::Enter,
+                '\t' => KeyCode::Tab,
+                c if !c.is_control() => KeyCode::Char(c),
+                _ => continue,
+            };
+            let _ = slot
+                .panel
+                .handle_key(KeyEvent::new(code, KeyModifiers::NONE));
+        }
+        // Even a paste containing no usable characters is deliberate input:
+        // the startup hint and watch-log boundary were retired above, so the
+        // current frame is stale independently of what the panel accepted.
+        true
     }
 
     /// Open arrange mode, remembering what to go back to.
@@ -3170,6 +3242,140 @@ mod tests {
             !app.should_quit,
             "Esc means back out of something, not quit"
         );
+    }
+
+    #[test]
+    fn a_panel_interrupt_gets_one_ctrl_c_and_the_second_still_quits() {
+        struct InterruptPanel {
+            armed: bool,
+        }
+
+        impl crate::panel::Panel for InterruptPanel {
+            fn title(&self) -> String {
+                "interrupt test".to_string()
+            }
+
+            fn render(
+                &mut self,
+                _frame: &mut ratatui::Frame,
+                _area: Rect,
+                _ctx: crate::panel::RenderContext<'_>,
+            ) {
+            }
+
+            fn handle_interrupt(&mut self) -> crate::panel::KeyOutcome {
+                if std::mem::take(&mut self.armed) {
+                    crate::panel::KeyOutcome::Consumed
+                } else {
+                    crate::panel::KeyOutcome::Ignored
+                }
+            }
+        }
+
+        let mut app = App::new(config_with(&["clocks"])).unwrap();
+        app.slots[0].panel = Box::new(InterruptPanel { armed: true });
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+
+        app.handle_key(ctrl_c);
+        assert!(!app.should_quit, "the live interrupt gets the first press");
+        app.handle_key(ctrl_c);
+        assert!(app.should_quit, "the disarmed panel cannot veto the second");
+    }
+
+    #[test]
+    fn an_interactive_panel_can_shorten_only_the_wait_while_it_captures_input() {
+        struct ResponsivePanel {
+            capturing: bool,
+        }
+
+        impl crate::panel::Panel for ResponsivePanel {
+            fn title(&self) -> String {
+                "responsive test".to_string()
+            }
+
+            fn refresh_interval(&self) -> Duration {
+                Duration::from_millis(16)
+            }
+
+            fn render(
+                &mut self,
+                _frame: &mut ratatui::Frame,
+                _area: Rect,
+                _ctx: crate::panel::RenderContext<'_>,
+            ) {
+            }
+
+            fn captures_input(&self) -> bool {
+                self.capturing
+            }
+        }
+
+        let configured = Duration::from_millis(250);
+        let mut app = App::new(config_with(&["clocks"])).unwrap();
+        app.slots[0].panel = Box::new(ResponsivePanel { capturing: false });
+        assert_eq!(app.poll_wait(configured), configured);
+
+        app.slots[0].panel = Box::new(ResponsivePanel { capturing: true });
+        assert_eq!(app.poll_wait(configured), Duration::from_millis(16));
+        assert_eq!(
+            app.poll_wait(Duration::from_millis(10)),
+            Duration::from_millis(10),
+            "a panel can ask for responsiveness but never slow the configured loop"
+        );
+    }
+
+    #[test]
+    fn a_bracketed_paste_reaches_only_a_panel_already_capturing_input() {
+        struct PastePanel {
+            capturing: bool,
+            pasted: std::rc::Rc<std::cell::RefCell<String>>,
+        }
+
+        impl crate::panel::Panel for PastePanel {
+            fn title(&self) -> String {
+                "paste test".to_string()
+            }
+
+            fn render(
+                &mut self,
+                _frame: &mut ratatui::Frame,
+                _area: Rect,
+                _ctx: crate::panel::RenderContext<'_>,
+            ) {
+            }
+
+            fn handle_paste(&mut self, text: &str) -> crate::panel::KeyOutcome {
+                if !self.capturing {
+                    return crate::panel::KeyOutcome::Ignored;
+                }
+                self.pasted.borrow_mut().push_str(text);
+                crate::panel::KeyOutcome::Consumed
+            }
+
+            fn captures_input(&self) -> bool {
+                self.capturing
+            }
+        }
+
+        let mut app = App::new(config_with(&["clocks"])).unwrap();
+        let pasted = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
+        app.slots[0].panel = Box::new(PastePanel {
+            capturing: false,
+            pasted: std::rc::Rc::clone(&pasted),
+        });
+        assert!(
+            app.handle_paste("q\n?"),
+            "deliberate input retires UI hints"
+        );
+        assert!(pasted.borrow().is_empty(), "global text is never pasted");
+        assert!(!app.should_quit, "a pasted q is never a global quit key");
+
+        app.slots[0].panel = Box::new(PastePanel {
+            capturing: true,
+            pasted: std::rc::Rc::clone(&pasted),
+        });
+        assert!(app.handle_paste("one\n\ttwo"));
+        assert_eq!(&*pasted.borrow(), "one\n\ttwo", "the block stays whole");
     }
 
     #[test]

@@ -21,8 +21,8 @@
 //!
 //! `title`, `counter`, `bindings`, `max_width`, `max_height` and
 //! `refresh_interval` are all "describe yourself", and folding them into one
-//! `describe() -> PanelInfo` would take the trait from thirteen methods to
-//! eight. It would also be slower and less useful, because the six are asked
+//! `describe() -> PanelInfo` would take the trait from eighteen methods to
+//! thirteen. It would also be slower and less useful, because the six are asked
 //! for at different times and at very different rates: `max_width` and
 //! `max_height` during layout, `refresh_interval` on the tick, `bindings` in
 //! three separate places, and `title` and `counter` on **every frame** — the
@@ -46,8 +46,9 @@ use crate::theme::{Gradients, Theme};
 /// Whether a panel handled an input event, or wants it to fall through to the
 /// application's global bindings.
 ///
-/// Shared by [`Panel::handle_key`] and [`Panel::handle_mouse`]: the two differ
-/// in what they receive, not in how the shell reacts to the answer.
+/// Shared by [`Panel::handle_key`], [`Panel::handle_interrupt`],
+/// [`Panel::handle_paste`] and [`Panel::handle_mouse`]: they differ in what
+/// they receive, not in how the shell reacts to the answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyOutcome {
     /// The panel used the event; the app should not act on it.
@@ -177,6 +178,8 @@ pub trait Panel {
     /// how often it expects to have something new to show — a clock with
     /// seconds ticks four times a second and changes once. Say how often you
     /// need to check, and answer the second question from [`Panel::tick`].
+    /// A focused panel that captures input may also shorten the application's
+    /// event wait to this interval, for asynchronous interactive feedback.
     fn refresh_interval(&self) -> Duration {
         Duration::from_secs(1)
     }
@@ -271,6 +274,26 @@ pub trait Panel {
 
     /// Handle a key event while focused.
     fn handle_key(&mut self, _key: KeyEvent) -> KeyOutcome {
+        KeyOutcome::Ignored
+    }
+
+    /// Handle `Ctrl+C` before the application treats it as its guaranteed way
+    /// out.
+    ///
+    /// Most panels must leave this alone. A panel that genuinely needs an
+    /// interrupt may consume one press only if the state it leaves behind
+    /// makes the next press fall through, preserving the rule that `Ctrl+C`
+    /// twice always quits.
+    fn handle_interrupt(&mut self) -> KeyOutcome {
+        KeyOutcome::Ignored
+    }
+
+    /// Insert one terminal bracketed paste while focused.
+    ///
+    /// Editors and terminal-like panels override this when the whole block
+    /// matters. The application retains a key-by-key fallback for existing
+    /// text fields that capture input but predate this hook.
+    fn handle_paste(&mut self, _text: &str) -> KeyOutcome {
         KeyOutcome::Ignored
     }
 

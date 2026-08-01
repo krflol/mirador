@@ -14,6 +14,7 @@ pub mod news;
 pub mod notes;
 pub mod pomodoro;
 pub mod stocks;
+pub mod terminal;
 pub mod todo;
 pub mod watchlog;
 pub mod weather;
@@ -38,7 +39,16 @@ pub const WIDGET_NAMES: &[&str] = &[
     "cpu",
     "network",
     "calculator",
+    "terminal",
 ];
+
+/// Widgets that are available in the picker but deliberately absent on a
+/// first run.
+///
+/// A terminal is not passive: placing it starts a real shell. That belongs to
+/// an explicit choice rather than the default dashboard's first impression.
+#[cfg(test)]
+pub const OPT_IN_WIDGET_NAMES: &[&str] = &["terminal"];
 
 /// Whether `name` refers to a widget mirador knows how to build.
 pub fn is_known_widget(name: &str) -> bool {
@@ -79,6 +89,7 @@ pub fn build(name: &str, config: &Config) -> Result<Option<Box<dyn Panel>>> {
         "cpu" => Box::new(cpu::CpuPanel::new(config.cpu.clone())),
         "network" => Box::new(network::NetworkPanel::new(config.network.clone())),
         "calculator" => Box::new(calculator::CalculatorPanel::new(config.calculator)),
+        "terminal" => Box::new(terminal::TerminalPanel::new(&config.terminal)?),
         _ => return Ok(None),
     };
     Ok(Some(panel))

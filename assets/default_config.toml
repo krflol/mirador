@@ -16,7 +16,8 @@
 # Docs: https://github.com/jchultarsky/mirador#configuration
 
 [general]
-# Frame budget in milliseconds. Lower is smoother and uses more CPU.
+# Frame budget in milliseconds. Lower is smoother and uses more CPU. A panel
+# actively capturing input may temporarily ask for a shorter interactive wait.
 tick_rate_ms = 250
 show_borders = true
 show_status_bar = true
@@ -50,7 +51,12 @@ check_for_updates = false
 # not cell counts, so the proportions hold at any terminal size.
 #
 # Available widgets: clocks, weather, todo, notes, stocks, calendar, agenda,
-# pomodoro, watchlog, news, cpu, network, calculator
+# pomodoro, watchlog, news, cpu, network, calculator, terminal
+#
+# `terminal` is the one opt-in widget: placing it starts a real shell. Give it
+# a useful amount of room, for example as its own row:
+#
+#   { height = 30, panels = [{ widget = "terminal", width = 100 }] },
 # ---------------------------------------------------------------------------
 [layout]
 rows = [
@@ -430,3 +436,18 @@ history     = 120
 sample_secs = 2               # see the note under [cpu]. Sampling the
                               # interface list is the more expensive of the
                               # two by roughly fifteen times.
+
+# ---------------------------------------------------------------------------
+# Terminal
+#
+# The embedded shell is not in the default layout because it starts a process.
+# Add `terminal` through the widget picker or [layout] when you want it.
+#
+# An empty command uses $SHELL on Unix and %COMSPEC% on Windows. A configured
+# command is executed directly, not interpreted as shell text:
+#
+#   command = ["pwsh", "-NoLogo"]
+# ---------------------------------------------------------------------------
+[terminal]
+command    = []
+scrollback = 2000

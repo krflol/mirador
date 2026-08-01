@@ -46,8 +46,8 @@ pub use layout::{Layout, LayoutPanel, LayoutRow};
 #[allow(unused_imports)]
 pub use widgets::{
     AgendaConfig, CalculatorConfig, CalendarConfig, ClockZone, ClocksConfig, CpuConfig,
-    NetworkConfig, NewsConfig, NewsFeed, NotesConfig, PomodoroConfig, StocksConfig, TodoConfig,
-    WeatherConfig,
+    NetworkConfig, NewsConfig, NewsFeed, NotesConfig, PomodoroConfig, StocksConfig, TerminalConfig,
+    TodoConfig, WeatherConfig,
 };
 
 /// Top-level configuration.
@@ -74,6 +74,7 @@ pub struct Config {
     pub news: NewsConfig,
     pub pomodoro: PomodoroConfig,
     pub calculator: CalculatorConfig,
+    pub terminal: TerminalConfig,
     pub cpu: CpuConfig,
     pub network: NetworkConfig,
 }
@@ -273,6 +274,25 @@ impl Config {
             anyhow::bail!(
                 "`[pomodoro].rounds_before_long_break` is 0; a set needs at least one focus \
                  interval before the long break."
+            );
+        }
+
+        if self.terminal.scrollback > 10_000 {
+            anyhow::bail!(
+                "`[terminal].scrollback` is {}; the maximum is 10000 lines. \
+                 Leave it out to use the default of 2000.",
+                self.terminal.scrollback
+            );
+        }
+        if self
+            .terminal
+            .command
+            .first()
+            .is_some_and(|program| program.trim().is_empty())
+        {
+            anyhow::bail!(
+                "`[terminal].command` starts with an empty program name. Remove the setting to \
+                 use the platform's default shell, or put the executable first."
             );
         }
 
@@ -778,11 +798,11 @@ mod tests {
     }
 
     #[test]
-    fn the_default_layout_places_every_widget() {
-        // A widget nobody can see is a widget nobody knows exists. The startup
-        // hint names what is missing, but the default should have nothing to
-        // name: shipping a dashboard that hides a third of itself is a poor
-        // first run, and this is exactly how notes and stocks went unseen.
+    fn the_default_layout_places_every_passive_widget() {
+        // A passive widget nobody can see is a widget nobody knows exists, and
+        // this is exactly how notes and stocks went unseen. Starting a process
+        // is a different promise: opt-in widgets remain in the picker and the
+        // documented list, but do not act merely because mirador was launched.
         let layout = Layout::default();
         let placed: Vec<&str> = layout
             .rows
@@ -791,6 +811,9 @@ mod tests {
             .collect();
 
         for widget in crate::widgets::WIDGET_NAMES {
+            if crate::widgets::OPT_IN_WIDGET_NAMES.contains(widget) {
+                continue;
+            }
             assert!(
                 placed.contains(widget),
                 "the default layout does not place `{widget}`"
@@ -819,6 +842,35 @@ mod tests {
         assert!(
             msg.contains("todo"),
             "should list valid widgets, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn terminal_defaults_to_the_platform_shell_with_bounded_scrollback() {
+        let config: Config = toml::from_str("[terminal]").expect("defaults parse");
+        assert!(config.terminal.command.is_empty());
+        assert_eq!(config.terminal.scrollback, 2_000);
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn terminal_rejects_an_empty_program_and_unbounded_history() {
+        let empty: Config =
+            toml::from_str("[terminal]\ncommand = [\"   \"]").expect("shape parses");
+        assert!(
+            empty
+                .validate()
+                .expect_err("an empty executable cannot launch")
+                .to_string()
+                .contains("empty program name")
+        );
+
+        let huge: Config = toml::from_str("[terminal]\nscrollback = 10001").expect("shape parses");
+        assert!(
+            huge.validate()
+                .expect_err("history is memory, so it needs a bound")
+                .to_string()
+                .contains("maximum is 10000")
         );
     }
 

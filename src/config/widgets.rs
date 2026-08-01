@@ -264,6 +264,26 @@ impl Default for CalendarConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct CalculatorConfig {}
 
+/// Embedded terminal settings.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct TerminalConfig {
+    /// Program and arguments to run. Empty selects the platform's default
+    /// shell (`$SHELL` on Unix and `%COMSPEC%` on Windows).
+    pub command: Vec<String>,
+    /// Lines retained above the visible terminal.
+    pub scrollback: usize,
+}
+
+impl Default for TerminalConfig {
+    fn default() -> Self {
+        Self {
+            command: Vec::new(),
+            scrollback: 2_000,
+        }
+    }
+}
+
 /// Pomodoro timer settings.
 ///
 /// These are the *starting* values. `+` and `-` change the timer in the panel,

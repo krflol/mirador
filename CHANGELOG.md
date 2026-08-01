@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **An opt-in embedded terminal panel.** Add `terminal` through the widget
+  picker or `[layout]` to keep a persistent shell inside the dashboard. Enter
+  engages it, Ctrl+G returns the keyboard to mirador, Shift+PageUp/PageDown and
+  the wheel move through bounded scrollback, and an exited shell can be
+  restarted in place.
+
+  The PTY/ConPTY reader, VT parser, input writer and child waiter run off the UI
+  thread and publish only the newest visible-screen snapshot. Long-running or
+  noisy commands therefore cannot block mirador's event loop, while ratatui
+  remains the only code rendering to the real terminal. While input is engaged,
+  the panel temporarily shortens that loop's wait for responsive echo. Resizes
+  reach both the child and parser; paste follows the child's bracketed-paste
+  mode; removing the panel or quitting tears the session down.
+
+  A shell needs Ctrl+C to interrupt a foreground command, without weakening
+  mirador's unconditional way out. The terminal consumes the first press and
+  disarms itself; a second consecutive press quits. Any other input re-arms it,
+  so "Ctrl+C twice always quits" holds in every editor and terminal state.
+
+### Changed
+
+- The default layout's every-widget rule now excludes widgets whose existence
+  itself has a side effect. The terminal remains visible in the picker and the
+  documented widget list, but a first run does not start a shell merely to show
+  that one is available.
+
 ## [1.4.1] - 2026-08-01
 
 ### Fixed

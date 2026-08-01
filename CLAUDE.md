@@ -139,13 +139,15 @@ dateinput.rs due-date entry
 ical.rs      enough RFC 5545 to answer "what is next"; no new dependencies
 calc.rs      the calculator's parser: precedence, brackets, bounded depth
 widgets/     clocks, weather, todo, notes, stocks, calendar, agenda,
-             pomodoro, watchlog, news, cpu, network, calculator
+             pomodoro, watchlog, news, cpu, network, calculator, terminal
 ```
 
-`Panel` has two input hooks. `handle_key` goes to the *focused* panel;
-`handle_mouse` goes to the panel under the *pointer*, which is deliberately not
-the same thing — a scroll wheel must move the list it is aimed at without
-yanking the keyboard away from what the user was typing in.
+`Panel` has four input hooks. `handle_key`, `handle_interrupt` and
+`handle_paste` go to the *focused* panel; `handle_mouse` goes to the panel under
+the *pointer*, which is deliberately not the same thing — a scroll wheel must
+move the list it is aimed at without yanking the keyboard away from what the
+user was typing in. The focused panel's input-capture veto still applies before
+the pointer is routed elsewhere.
 
 Adding a widget: implement `Panel`, add a config struct to `config/widgets.rs`,
 add the name to `WIDGET_NAMES` and an arm to `build()` in `widgets/mod.rs`,
@@ -228,7 +230,7 @@ map, that one is the procedure.
     nothing. Both are whole-panel measurements, frame and padding included.
 16. **The config is edited, never reserialised.** This is the real form of the
     "never rewrites the config" rule, which was always about comments: a round
-    trip through `toml` discards all 286 of them, including the ones mirador
+    trip through `toml` discards all 303 of them, including the ones mirador
     wrote to explain its own options. `migrate.rs` established the alternative
     and `layout_edit.rs` follows it — find the line, change that line, leave
     everything else alone. Adding a panel is a one-line diff.
@@ -317,6 +319,26 @@ map, that one is the procedure.
     buffer records what the terminal *kept*, so an overflowing line and a line
     that happens to end there are the same bytes. Overflow has to be caught
     where the line is built.
+
+20. **There is one renderer, even when a panel contains a terminal.** The
+    terminal panel owns a PTY/ConPTY, but it never writes to mirador's real
+    terminal. Its reader and VT parser run on background threads and overwrite
+    a one-element mailbox with a snapshot of only the visible cells; `tick()`
+    swaps that snapshot in and ratatui draws it with every other panel. A second
+    render loop would race ratatui's buffer diff and corrupt both screens.
+
+    The distinction is also the performance boundary. Child output is parsed
+    away from the UI thread, and scrollback is not cloned into the snapshot, so
+    a verbose build can slow its own PTY worker without making the dashboard
+    stop accepting keys. Terminal query replies (`CSI 6 n` in particular) are
+    not optional: Windows ConPTY asks for a cursor position while bringing up a
+    shell and waits for the answer.
+
+    The panel is absent from the default layout even though it remains in the
+    picker. Every other widget is passive when it is built; this one starts a
+    real process, and first run is not consent to do that. Once engaged it uses
+    `captures_input`, `Ctrl+G` releases it, and its first `Ctrl+C` disarms the
+    interrupt hook so the second always reaches mirador's guaranteed exit.
 
 ## Visual system
 

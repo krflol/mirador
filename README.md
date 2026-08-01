@@ -16,9 +16,9 @@ nothing shimmers, and nothing is designed to pull you back to it.
 
 A *mirador* is a lookout — the tower you climb to see everything at once.
 
-![All thirteen mirador panels on a wide terminal, in use: a block-numeral clock, two months of calendar, weather with an hourly forecast, the task list, an agenda of upcoming events, notes, a news panel of headlines, a watch log, a calculator, a pomodoro timer, and a market watchlist beside live CPU and network graphs. Focus moves between panels, a task is typed in and added to the list, the panel picker switches a panel off and the grid reflows around it, arrange mode moves the task panel along its row and up into the row above until it takes a row of its own, the help overlay opens and scrolls, three sums are typed into the calculator and feed up its tape, and the pomodoro timer starts counting down](https://raw.githubusercontent.com/jchultarsky/mirador/main/docs/demo.gif)
+![All thirteen default mirador panels on a wide terminal, in use: a block-numeral clock, two months of calendar, weather with an hourly forecast, the task list, an agenda of upcoming events, notes, a news panel of headlines, a watch log, a calculator, a pomodoro timer, and a market watchlist beside live CPU and network graphs. Focus moves between panels, a task is typed in and added to the list, the panel picker switches a panel off and the grid reflows around it, arrange mode moves the task panel along its row and up into the row above until it takes a row of its own, the help overlay opens and scrolls, three sums are typed into the calculator and feed up its tape, and the pomodoro timer starts counting down](https://raw.githubusercontent.com/jchultarsky/mirador/main/docs/demo.gif)
 
-*All thirteen panels on a first run, at 200x50 — wide enough that nothing has to fall
+*All thirteen default panels on a first run, at 200x50 — wide enough that nothing has to fall
 back. The lit frame is the focused panel, with its own keys in its bottom
 border; every other panel is dimmed, so exactly one thing is at full brightness.*
 
@@ -326,9 +326,11 @@ overwritten, so resetting twice still leaves the first one recoverable.
 
 ## The panels
 
-Twelve widgets, each answering one question. Put the ones you want in the
+Thirteen passive widgets each answer one question. Put the ones you want in the
 layout and drop the rest — a widget your layout leaves out is never built, and
-nothing will nag you about it.
+nothing will nag you about it. The opt-in terminal is the fourteenth: unlike a
+clock or a note it starts a real process, so a first run does not open one on
+your behalf.
 
 ### Tasks
 
@@ -709,6 +711,58 @@ answers stay: an answer without its sum is still an answer.
 Nothing is kept when you quit. There is no memory key, no percent key and no
 functions — the tape and carrying an answer forward cover what those were for.
 
+### Terminal
+
+An interactive shell that stays inside the dashboard. It starts in the
+directory where mirador was launched, so `cd` persists for the session and
+commands such as `cargo`, `npm`, `pip`, or `explorer .` behave as they do in an
+ordinary terminal.
+
+It is deliberately absent from the first-run layout because placing it starts
+a process. Add `terminal` with `w`, or give it a useful row in `[layout]`:
+
+```toml
+{ height = 30, panels = [{ widget = "terminal", width = 100 }] },
+```
+
+Focus and shell input are separate states. `Tab`, `q`, `?`, `w`, `m` and `t`
+remain dashboard keys until you press `Enter` in the panel. While the shell is
+engaged every ordinary key goes to it; `Ctrl+G` returns to dashboard navigation.
+
+| Key | Action |
+| --- | --- |
+| `Enter` | Engage the shell |
+| `Ctrl+G` | Release input back to the dashboard |
+| `Ctrl+C` | Interrupt the foreground command; a second consecutive press quits mirador |
+| `Shift+PageUp` / `Shift+PageDown` | Move through scrollback |
+| Mouse wheel | Move through scrollback |
+| `r` | Restart a shell that exited or failed |
+
+Paste is sent as one UTF-8 block and follows the child application's bracketed-
+paste mode, so multiline text is not replayed through mirador's global keys.
+The output reader, VT parser, input writer and child waiter all run away from
+the dashboard thread. A noisy build can fill the panel without preventing the
+clock, notes or keyboard from updating; ratatui remains the one renderer, since
+two loops writing independently to the same real terminal would corrupt each
+other. While input is engaged the terminal shortens that existing loop's wait
+to 16 ms for prompt echo; releasing it restores the configured dashboard pace.
+
+An empty command selects `$SHELL` on Unix and `%COMSPEC%` on Windows. To choose
+another program, name it and each argument separately — it is executed directly,
+not as shell text:
+
+```toml
+[terminal]
+command = ["pwsh", "-NoLogo"]
+scrollback = 2000
+```
+
+Removing the panel or leaving mirador closes its PTY and terminates the shell.
+Full-screen keyboard applications use the same VT screen and resize with the
+panel. Their mouse protocol is not forwarded: the wheel belongs to mirador's
+scrollback, and the outer terminal's selection override (Shift in most
+terminals) remains the way to select rendered output.
+
 ### CPU and network
 
 CPU shows average load, a moving history graph and a per-core meter row.
@@ -880,6 +934,7 @@ rather than failing quietly.
 | `agenda` | What is next, from a local `.ics` file |
 | `pomodoro` | A focus timer: phase, time left, progress, and the set so far |
 | `calculator` | Type a sum, press Enter; an adding machine's tape of what you worked out |
+| `terminal` | A persistent interactive shell, opt-in because it starts a process |
 | `cpu` | Average utilisation, a moving chart, and per-core meters |
 | `network` | Receive and transmit rates as moving charts |
 
@@ -1099,7 +1154,7 @@ needs to know it exists.
 
 ## Acknowledgements
 
-mirador is a thin layer over other people's hard work. Ten direct
+mirador is a thin layer over other people's hard work. Thirteen direct
 dependencies, every one of them maintained by someone who did not have to.
 
 **[ratatui](https://ratatui.rs)** deserves top billing. Every frame here is
@@ -1117,6 +1172,8 @@ is what makes the same binary work on macOS, Linux and Windows terminals.
 | --- | --- |
 | [ratatui](https://ratatui.rs) | Every widget, layout and redraw |
 | [crossterm](https://github.com/crossterm-rs/crossterm) | Terminal control, key and mouse events |
+| [portable-pty](https://github.com/wezterm/wezterm) | Unix PTYs and Windows ConPTY behind one interface |
+| [tui-term](https://github.com/a-kenji/tui-term) | Rendering the child terminal's parsed VT cells into ratatui |
 | [jiff](https://github.com/BurntSushi/jiff) | Dates, IANA timezones, the "2 days late" arithmetic |
 | [sysinfo](https://github.com/GuillaumeGomez/sysinfo) | CPU and network counters, per platform |
 | [ureq](https://github.com/algesten/ureq) | Blocking HTTP for weather and quotes |

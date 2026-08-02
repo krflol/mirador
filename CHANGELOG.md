@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **External panels are an explicit, language-neutral process boundary.** A
+  configured command can publish styled frame snapshots and opt into bounded
+  key, paste, mouse and interrupt events. Mirador embeds no interpreter,
+  performs no plugin discovery, and starts no process unless its id is placed
+  in the layout. Each process is isolated from the UI thread, output and input
+  are bounded, and Ctrl+C twice remains an unconditional exit even when a
+  child is stuck. The protocol is documented independently so SDKs do not link
+  against Mirador's private Rust `Panel` trait.
+
 ## [1.5.0] - 2026-08-02
 
 Both features in this release came from outside the project, contributed by

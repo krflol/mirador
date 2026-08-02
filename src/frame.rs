@@ -15,6 +15,8 @@
 //! Focus is signalled by *recession* rather than by brightening — unfocused
 //! frames dim, so exactly one thing on screen is at normal brightness.
 
+use std::borrow::Cow;
+
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -57,12 +59,12 @@ pub fn centred(area: Rect, width: u16, height: u16) -> Rect {
 ///
 /// One declaration feeds the border hint, the status bar and the help overlay,
 /// so a binding can never drift out of sync with the text describing it.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Binding {
     /// The key as typed, e.g. `a`, `space`, `Tab`.
-    pub key: &'static str,
+    pub key: Cow<'static, str>,
     /// What it does, in the imperative.
-    pub action: &'static str,
+    pub action: Cow<'static, str>,
     /// Whether it is important enough for the border hint. Bindings that are
     /// aliases (`j` for `down`) or expert-only set this false so they do not
     /// spend the small hint budget.
@@ -73,8 +75,8 @@ impl Binding {
     /// A binding shown in the border hint.
     pub const fn primary(key: &'static str, action: &'static str) -> Self {
         Self {
-            key,
-            action,
+            key: Cow::Borrowed(key),
+            action: Cow::Borrowed(action),
             primary: true,
         }
     }
@@ -82,9 +84,18 @@ impl Binding {
     /// A binding that appears only in the help overlay.
     pub const fn extra(key: &'static str, action: &'static str) -> Self {
         Self {
-            key,
-            action,
+            key: Cow::Borrowed(key),
+            action: Cow::Borrowed(action),
             primary: false,
+        }
+    }
+
+    /// A binding supplied at runtime, for example by an external plugin.
+    pub fn owned(key: impl Into<String>, action: impl Into<String>, primary: bool) -> Self {
+        Self {
+            key: Cow::Owned(key.into()),
+            action: Cow::Owned(action.into()),
+            primary,
         }
     }
 }
@@ -119,7 +130,7 @@ pub fn hint_line(bindings: &[Binding], theme: &Theme, budget: u16) -> Option<Lin
         if !separator.is_empty() {
             spans.push(Span::styled(separator, action_style));
         }
-        spans.push(Span::styled(binding.key, key_style));
+        spans.push(Span::styled(binding.key.clone(), key_style));
         spans.push(Span::styled(format!(" {}", binding.action), action_style));
         used += width;
     }

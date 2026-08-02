@@ -897,6 +897,29 @@ rather than failing quietly.
 | `cpu` | Average utilisation, a moving chart, and per-core meters |
 | `network` | Receive and transmit rates as moving charts |
 
+### External panels (optional)
+
+Mirador can host an explicitly configured panel process through its
+[versioned JSON-lines protocol](docs/plugin-protocol.md). This is an escape
+hatch for personal customization, not a second built-in widget system: the
+release binary embeds no interpreter, discovers nothing, and starts no plugin
+unless both its command is declared and its id is placed in the layout.
+
+```toml
+[[plugins]]
+id = "example"
+command = ["example-mirador-plugin"]
+
+[plugins.config]
+plugin_owned_setting = true
+```
+
+Plugin commands are arbitrary code with your permissions, not sandboxed
+extensions. The optional Python SDK and the first experimental terminal plugin
+live separately at
+[krflol/mirador-plugins](https://github.com/krflol/mirador-plugins); Mirador
+does not require Python or that repository.
+
 ### Market data
 
 The watchlist reads `query1.finance.yahoo.com`, the endpoint Yahoo's own charts
@@ -1107,9 +1130,10 @@ Bug reports, feature requests and pull requests are welcome. See
 [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow, and
 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for the ground rules.
 
-Adding a widget means implementing the `Panel` trait, registering the name in
-`src/widgets/mod.rs`, and documenting it here. Nothing else in the codebase
-needs to know it exists.
+Adding a built-in widget means implementing the `Panel` trait, registering the
+name in `src/widgets/mod.rs`, and documenting it here. A personal or
+language-independent extension can instead implement the
+[external panel protocol](docs/plugin-protocol.md) without linking to Mirador.
 
 ## Acknowledgements
 

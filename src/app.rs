@@ -552,7 +552,7 @@ impl App {
                 dirty = false;
             }
 
-            if event::poll(tick_rate)? {
+            if event::poll(self.poll_wait(tick_rate))? {
                 match event::read()? {
                     // Only react to presses; on Windows every key also emits a
                     // release event, which would otherwise double every action.
@@ -757,6 +757,18 @@ impl App {
             .is_some_and(|slot| slot.panel.captures_input())
     }
 
+    /// Let a focused interactive panel request responsive asynchronous echo
+    /// without changing the dashboard-wide polling budget. The floor prevents
+    /// an external process from turning the shell into a busy loop.
+    fn poll_wait(&self, configured: Duration) -> Duration {
+        self.slots
+            .get(self.focus)
+            .filter(|slot| slot.panel.captures_input())
+            .map_or(configured, |slot| {
+                configured.min(slot.panel.refresh_interval().max(Duration::from_millis(16)))
+            })
+    }
+
     fn handle_key(&mut self, key: KeyEvent) {
         // Any key at all retires the startup hint. It has been read or it has
         // been ignored; either way it has had its turn.
@@ -768,15 +780,16 @@ impl App {
 
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
-        // Ctrl+C remains the terminal's quit key unless the focused editor has
-        // an actual text selection to copy. Merely being inside a form is not
-        // enough to steal the interrupt: with no selection, it still quits as
-        // it always has.
+        // Editors get first refusal for a real selection, then a live child
+        // process may consume one interrupt. Both hooks must disarm themselves
+        // when they consume it, so the invariant stays simple even when a
+        // plugin is wedged: Ctrl+C twice always quits.
         if ctrl && matches!(key.code, KeyCode::Char('c')) {
-            let copied = self.slots.get_mut(self.focus).is_some_and(|slot| {
+            let consumed = self.slots.get_mut(self.focus).is_some_and(|slot| {
                 slot.panel.copy_selection() == crate::panel::KeyOutcome::Consumed
+                    || slot.panel.handle_interrupt() == crate::panel::KeyOutcome::Consumed
             });
-            if copied {
+            if consumed {
                 return;
             }
             self.should_quit = true;
@@ -1047,7 +1060,7 @@ impl App {
         };
         match picker.handle_key(key) {
             crate::picker::Action::None => {}
-            crate::picker::Action::Toggle(name) => self.toggle_widget(name),
+            crate::picker::Action::Toggle(name) => self.toggle_widget(&name),
             crate::picker::Action::Close => {
                 self.picker = None;
                 // Written on close rather than on every toggle: someone trying
@@ -1224,7 +1237,9 @@ impl App {
                 // panel you just focused are the reason you pressed `?`.
                 self.help_scroll = 0;
             }
-            KeyCode::Char('w') => self.picker = Some(crate::picker::Picker::new()),
+            KeyCode::Char('w') => {
+                self.picker = Some(crate::picker::Picker::new(self.config.widget_names()));
+            }
             KeyCode::Char('t') => self.open_theme_picker(),
             KeyCode::Char('m') => self.enter_arrange(),
             KeyCode::Char(c @ '1'..='9') => {
@@ -1651,7 +1666,7 @@ impl App {
         for binding in GLOBAL.iter().filter(|b| b.primary) {
             parts.push(vec![
                 Span::styled("   ", muted),
-                Span::styled(binding.key, key_style),
+                Span::styled(binding.key.clone(), key_style),
                 Span::styled(format!(" {}", binding.action), muted),
             ]);
         }
@@ -2153,9 +2168,9 @@ mod tests {
         whole.push(acc.clone());
         for binding in GLOBAL.iter().filter(|b| b.primary) {
             acc.push_str("   ");
-            acc.push_str(binding.key);
+            acc.push_str(&binding.key);
             acc.push(' ');
-            acc.push_str(binding.action);
+            acc.push_str(&binding.action);
             whole.push(acc.clone());
         }
 
@@ -3226,6 +3241,86 @@ mod tests {
             !app.should_quit,
             "Esc means back out of something, not quit"
         );
+    }
+
+    #[test]
+    fn only_a_focused_capturing_panel_can_shorten_the_event_wait() {
+        struct ResponsivePanel {
+            capturing: bool,
+        }
+
+        impl crate::panel::Panel for ResponsivePanel {
+            fn title(&self) -> String {
+                "responsive test".into()
+            }
+
+            fn refresh_interval(&self) -> Duration {
+                Duration::from_millis(8)
+            }
+
+            fn captures_input(&self) -> bool {
+                self.capturing
+            }
+
+            fn render(
+                &mut self,
+                _frame: &mut ratatui::Frame,
+                _area: Rect,
+                _ctx: crate::panel::RenderContext<'_>,
+            ) {
+            }
+        }
+
+        let configured = Duration::from_millis(250);
+        let mut app = App::new(config_with(&["clocks"])).unwrap();
+        app.slots[0].panel = Box::new(ResponsivePanel { capturing: false });
+        assert_eq!(app.poll_wait(configured), configured);
+
+        app.slots[0].panel = Box::new(ResponsivePanel { capturing: true });
+        assert_eq!(app.poll_wait(configured), Duration::from_millis(16));
+        assert_eq!(
+            app.poll_wait(Duration::from_millis(10)),
+            Duration::from_millis(10),
+            "a panel may ask for responsiveness but never slow the configured loop"
+        );
+    }
+
+    #[test]
+    fn an_external_interrupt_gets_one_ctrl_c_and_the_second_still_quits() {
+        struct InterruptPanel {
+            armed: bool,
+        }
+
+        impl crate::panel::Panel for InterruptPanel {
+            fn title(&self) -> String {
+                "interrupt test".into()
+            }
+
+            fn handle_interrupt(&mut self) -> crate::panel::KeyOutcome {
+                if std::mem::take(&mut self.armed) {
+                    crate::panel::KeyOutcome::Consumed
+                } else {
+                    crate::panel::KeyOutcome::Ignored
+                }
+            }
+
+            fn render(
+                &mut self,
+                _frame: &mut ratatui::Frame,
+                _area: Rect,
+                _ctx: crate::panel::RenderContext<'_>,
+            ) {
+            }
+        }
+
+        let mut app = App::new(config_with(&["clocks"])).unwrap();
+        app.slots[0].panel = Box::new(InterruptPanel { armed: true });
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+
+        app.handle_key(ctrl_c);
+        assert!(!app.should_quit, "the live child gets the first interrupt");
+        app.handle_key(ctrl_c);
+        assert!(app.should_quit, "the disarmed panel cannot veto the second");
     }
 
     #[test]

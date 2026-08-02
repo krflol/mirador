@@ -54,11 +54,11 @@ mirador --print-config > /tmp/mirador.toml
 cargo run -- --config /tmp/mirador.toml
 ```
 
-## Adding a widget
+## Adding a built-in widget
 
-The `Panel` trait in `src/panel.rs` is the seam. It is in-tree — mirador has no
-library target and `widgets::build` dispatches on a fixed match — so adding a
-widget means a pull request rather than a separate crate. Five places to touch:
+The `Panel` trait in `src/panel.rs` is Mirador's private in-tree seam. A widget
+that belongs in every installation still means a pull request. Five places to
+touch:
 
 1. Create `src/widgets/<name>.rs` and implement `Panel`.
 2. Add a config struct to `src/config/widgets.rs` and a field on `Config` in
@@ -75,6 +75,13 @@ widget means a pull request rather than a separate crate. Five places to touch:
 Widgets must not block. If your widget needs network or disk I/O, do it on a
 background thread and poll the result in `tick`, as `weather.rs` does. A panel
 that blocks freezes the whole dashboard.
+
+Personal or experimental panels do not need to become core widgets. The
+[external panel protocol](docs/plugin-protocol.md) is a versioned process
+boundary: it has no Rust ABI, lets the plugin own an opaque config table, and
+keeps language runtimes out of the Mirador binary. External plugins are not
+sandboxed; their command is an explicit trust decision by the person editing
+the config.
 
 If your widget needs a setting the user can change from the keyboard, two
 things already exist for it. A value that is free text — a path, a place, a

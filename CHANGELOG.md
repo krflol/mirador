@@ -16,7 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in the layout. Each process is isolated from the UI thread, output and input
   are bounded, and Ctrl+C twice remains an unconditional exit even when a
   child is stuck. The protocol is documented independently so SDKs do not link
-  against Mirador's private Rust `Panel` trait.
+  against Mirador's private Rust `Panel` trait. External panels can also hand
+  bounded, completed events to Mirador's native Watch Log.
 
 ## [1.5.0] - 2026-08-02
 

@@ -130,6 +130,18 @@ A child may also report a visible non-fatal or fatal error:
 A fatal error ends the process. A non-fatal error remains a panel notice until
 a later state replaces it.
 
+A plugin can hand one notable, completed event to Mirador's native Watch Log:
+
+```json
+{"type":"watch","text":"tests finished successfully in 42 seconds"}
+```
+
+Mirador supplies the timestamp and configured plugin id as the source. Text
+must be one non-empty line of at most 1,024 UTF-8 bytes. At most 64 undrained
+events are retained per panel, so a noisy plugin cannot create an unbounded
+queue. This hook carries outcomes, not progress updates; the Watch Log's high
+bar for what counts still applies.
+
 ## Host-to-child messages
 
 After negotiation the host may send:

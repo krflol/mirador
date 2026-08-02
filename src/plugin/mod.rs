@@ -30,6 +30,7 @@ use process::{Phase, Runtime, Shared, spawn_process};
 
 pub const PROTOCOL_VERSION: u16 = 1;
 const MAX_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_WATCH_TEXT_BYTES: usize = 1024;
 const DEFAULT_REFRESH: Duration = Duration::from_millis(33);
 
 #[derive(Debug, Serialize)]
@@ -99,6 +100,9 @@ enum PluginMessage {
         message: String,
         #[serde(default)]
         fatal: bool,
+    },
+    Watch {
+        text: String,
     },
 }
 
@@ -432,6 +436,18 @@ impl Panel for PluginPanel {
     fn tick(&mut self) -> bool {
         let _ = self.send(HostMessage::Tick);
         self.sync()
+    }
+
+    fn events(&mut self) -> Vec<crate::watch::Event> {
+        let mut shared = self
+            .shared
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        shared
+            .watch
+            .drain(..)
+            .map(|text| crate::watch::Event::new(self.spec.id.clone(), text))
+            .collect()
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, ctx: RenderContext<'_>) {
@@ -898,6 +914,67 @@ mod tests {
     }
 
     #[test]
+    fn watch_messages_enter_the_native_panel_event_drain() {
+        let mut panel = detached_panel(InputPolicy::default());
+        assert!(apply_message(
+            PluginMessage::Ready {
+                protocol: PROTOCOL_VERSION,
+                title: None,
+                refresh_ms: None,
+            },
+            &panel.shared,
+        ));
+        assert!(apply_message(
+            PluginMessage::Watch {
+                text: "the build finished".into(),
+            },
+            &panel.shared,
+        ));
+
+        let events = panel.events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].source, "test");
+        assert_eq!(events[0].text, "the build finished");
+        assert!(panel.events().is_empty(), "the native hook is a drain");
+    }
+
+    #[test]
+    fn watch_messages_are_single_lines_and_their_queue_is_bounded() {
+        let shared = Arc::new(Mutex::new(Shared::starting()));
+        assert!(apply_message(
+            PluginMessage::Ready {
+                protocol: PROTOCOL_VERSION,
+                title: None,
+                refresh_ms: None,
+            },
+            &shared,
+        ));
+        for index in 0..65 {
+            assert!(apply_message(
+                PluginMessage::Watch {
+                    text: format!("event {index}"),
+                },
+                &shared,
+            ));
+        }
+        let guard = shared.lock().unwrap();
+        assert_eq!(guard.watch.len(), 64);
+        assert_eq!(guard.watch.front().map(String::as_str), Some("event 1"));
+        drop(guard);
+
+        assert!(!apply_message(
+            PluginMessage::Watch {
+                text: "not\none line".into(),
+            },
+            &shared,
+        ));
+        assert!(matches!(
+            shared.lock().unwrap().phase,
+            Phase::Failed(ref error) if error.contains("one non-empty line")
+        ));
+    }
+
+    #[test]
     fn interrupt_policy_is_locally_one_shot() {
         let mut panel = detached_panel(InputPolicy {
             capture: true,
@@ -969,5 +1046,59 @@ mod tests {
         let phase = panel.phase.clone();
         panel.shutdown();
         panic!("plugin did not publish a frame within five seconds: {phase:?}");
+    }
+
+    /// Full proof for the dashboard-native example: Rust host -> Python SDK ->
+    /// process watcher -> child process -> protocol watch message -> native
+    /// `Panel::events` drain.
+    #[test]
+    #[ignore = "requires an explicitly installed mirador-process-watch command"]
+    fn an_external_process_watcher_reports_a_native_watch_event() {
+        use std::time::Instant;
+
+        let watcher = std::env::var("MIRADOR_TEST_WATCH_PLUGIN")
+            .expect("set MIRADOR_TEST_WATCH_PLUGIN to mirador-process-watch");
+        let child = std::env::current_exe()
+            .expect("test executable has a path")
+            .to_string_lossy()
+            .into_owned();
+        let mut config = toml::Table::new();
+        config.insert("name".into(), toml::Value::String("Host tests".into()));
+        config.insert(
+            "command".into(),
+            toml::Value::Array(
+                [child, "--list".into()]
+                    .into_iter()
+                    .map(toml::Value::String)
+                    .collect(),
+            ),
+        );
+        config.insert("autostart".into(), toml::Value::Boolean(true));
+        config.insert("output_lines".into(), toml::Value::Integer(50));
+        let mut panel = PluginPanel::new(PluginConfig {
+            id: "process-watch-test".into(),
+            command: vec![watcher],
+            config,
+        });
+        let deadline = Instant::now() + Duration::from_secs(15);
+
+        while Instant::now() < deadline {
+            panel.tick();
+            if let Some(event) = panel.events().into_iter().next() {
+                panel.shutdown();
+                assert_eq!(event.source, "process-watch-test");
+                assert!(
+                    event.text.contains("finished successfully"),
+                    "unexpected Watch Log event: {}",
+                    event.text
+                );
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        let phase = panel.phase.clone();
+        panel.shutdown();
+        panic!("process watcher did not report completion within fifteen seconds: {phase:?}");
     }
 }

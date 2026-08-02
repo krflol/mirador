@@ -1,5 +1,6 @@
 //! Child lifecycle and bounded stdio workers for one external panel.
 
+use std::collections::VecDeque;
 use std::io::{self, BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
@@ -10,11 +11,13 @@ use std::time::{Duration, Instant};
 use crate::config::PluginConfig;
 
 use super::{
-    DEFAULT_REFRESH, HostMessage, MAX_MESSAGE_BYTES, PROTOCOL_VERSION, PluginMessage, WireFrame,
+    DEFAULT_REFRESH, HostMessage, MAX_MESSAGE_BYTES, MAX_WATCH_TEXT_BYTES, PROTOCOL_VERSION,
+    PluginMessage, WireFrame,
 };
 
 const MAX_STDERR_BYTES: usize = 8 * 1024;
 const EVENT_QUEUE: usize = 256;
+const WATCH_QUEUE: usize = 64;
 const SHUTDOWN_GRACE: Duration = Duration::from_millis(300);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,6 +38,7 @@ pub(super) struct Shared {
     pub(super) frame: Option<WireFrame>,
     pub(super) notice: Option<String>,
     pub(super) stderr: String,
+    pub(super) watch: VecDeque<String>,
 }
 
 impl Shared {
@@ -48,6 +52,7 @@ impl Shared {
             frame: None,
             notice: None,
             stderr: String::new(),
+            watch: VecDeque::new(),
         }
     }
 
@@ -291,6 +296,27 @@ pub(super) fn apply_message(message: PluginMessage, shared: &Arc<Mutex<Shared>>)
                 return false;
             }
             shared.notice = Some(message);
+            shared.changed();
+        }
+        PluginMessage::Watch { text } => {
+            if !shared.ready {
+                shared.fail("plugin sent a watch event before `ready`");
+                return false;
+            }
+            if text.trim().is_empty()
+                || text.len() > MAX_WATCH_TEXT_BYTES
+                || text.chars().any(char::is_control)
+            {
+                shared.fail(format!(
+                    "plugin watch text must be one non-empty line of at most {MAX_WATCH_TEXT_BYTES} UTF-8 bytes"
+                ));
+                return false;
+            }
+            if shared.watch.len() == WATCH_QUEUE {
+                shared.watch.pop_front();
+                shared.notice = Some("plugin watch queue overflowed; oldest event dropped".into());
+            }
+            shared.watch.push_back(text);
             shared.changed();
         }
     }
